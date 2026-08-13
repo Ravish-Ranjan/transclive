@@ -18,32 +18,42 @@ model User {
 }
 
 model Transcription {
-  id     String @id @default(cuid())
-  userId String
+  id          String   @id @default(cuid())
+  userId      String
 
-  title      String
-  language   String
-  transcript String
-  segments   Json
-  summary    String?
+  title       String?
+  language    String
+  duration    Float?
+  status      TranscriptionStatus @default(COMPLETED)
 
-  durationSeconds Int?
-  wordCount       Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  status TranscriptionStatus @default(SAVED)
+  user        User @relation(fields: [userId],references: [id],onDelete: Cascade)
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  user User @relation(fields: [userId],references: [id],onDelete: Cascade)
+  segments    TranscriptSegment[]
 
   @@index([userId])
-  @@index([createdAt])
+  @@index([userId, createdAt])
+}
+
+model TranscriptSegment {
+  id             String   @id @default(cuid())
+  transcriptionId String
+
+  text           String
+  start          Float
+  end            Float
+  speaker        Int?
+  confidence     Float?
+
+  transcription  Transcription @relation(fields: [transcriptionId],references: [id],onDelete: Cascade)
+
+  @@index([transcriptionId])
 }
 
 enum TranscriptionStatus {
-  SAVED
-  SUMMARIZING
-  READY
+  RECORDING
+  COMPLETED
   FAILED
 }

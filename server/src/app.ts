@@ -3,10 +3,13 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import { config } from "dotenv";
 import helmet from "helmet";
+
 import { AppError } from "./utils/appError.js";
 import { errorHandler } from "./middlewares/error.middleware.js";
 import morgan from "morgan";
 import { prisma } from "./lib/prisma.js";
+import authRouter from "./routes/auth.route.js";
+import transcriptionsRouter from "./routes/transcrpition.route.js";
 
 config();
 
@@ -66,6 +69,9 @@ app.get("/api/health", async (_req, res) => {
 		});
 	}
 });
+
+app.use("/api/auth", authRouter);
+app.use("/api/transcriptions", transcriptionsRouter);
 
 app.all("/*splat", (req, res, next) => {
 	next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
