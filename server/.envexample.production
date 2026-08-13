@@ -1,0 +1,12 @@
+DATABASE_URL="<datbase-url>"
+
+DEEPGRAM_API_KEY="<deepgram-api-key>"
+AUTH_SECRET="<super-secret-auth-key>"
+
+AI_API_KEY="<ai-api-key>"
+
+CLIENT_URL="http://localhost:3000"
+PORT=<port>
+NODE_ENV="production"
+ALLOWEDORIGINS="list,of,allowed,origins"
+
