@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transcriptions Transcription[]
+}
+
+model Transcription {
+  id     String @id @default(cuid())
+  userId String
+
+  title      String
+  language   String
+  transcript String
+  segments   Json
+  summary    String?
+
+  durationSeconds Int?
+  wordCount       Int?
+
+  status TranscriptionStatus @default(SAVED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId],references: [id],onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+enum TranscriptionStatus {
+  SAVED
+  SUMMARIZING
+  READY
+  FAILED
+}
