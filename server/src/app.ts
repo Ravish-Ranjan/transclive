@@ -25,23 +25,33 @@ app.use(
 	}),
 );
 
-const allowedOrigins = process.env.ALLOWEDORIGINS
-	? process.env.ALLOWEDORIGINS.split(",")
-	: [];
+// Split origins, trim hidden spaces/newlines, and strip trailing slashes
+const allowedOrigins = (process.env.ALLOWEDORIGINS || "")
+	.split(",")
+	.map((origin) => origin.trim().replace(/\/$/, ""))
+	.filter(Boolean);
 
 app.use(
 	cors({
 		origin(requestOrigin, callback) {
+			// Allow requests with no origin (like mobile apps, curl, or Postman)
 			if (!requestOrigin) return callback(null, true);
-			if (allowedOrigins.indexOf(requestOrigin ?? "") === -1) {
-				const msg =
-					"The CORS policy for this site does not allow access from the specified Origin.";
-				return callback(new Error(msg), false);
+
+			// Strip trailing slash from incoming browser origin for clean matching
+			const cleanOrigin = requestOrigin.replace(/\/$/, "");
+
+			if (allowedOrigins.includes(cleanOrigin)) {
+				return callback(null, true);
 			}
-			return callback(null, true);
+
+			// DO NOT pass new Error() - simply pass false to reject cleanly
+			console.warn(
+				`[CORS Blocked] Origin received: "${requestOrigin}" (Cleaned: "${cleanOrigin}")`,
+			);
+			return callback(null, false);
 		},
 		credentials: true,
-		optionsSuccessStatus: 200,
+		optionsSuccessStatus: 200, // Necessary for legacy browser preflight handling
 	}),
 );
 
