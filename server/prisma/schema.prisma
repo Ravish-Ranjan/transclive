@@ -25,6 +25,8 @@ model Transcription {
   language    String
   duration    Float?
   status      TranscriptionStatus @default(COMPLETED)
+  summary     String?
+  summaryStatus SummaryStatus @default(NONE)
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -55,5 +57,12 @@ model TranscriptSegment {
 enum TranscriptionStatus {
   RECORDING
   COMPLETED
+  FAILED
+}
+
+enum SummaryStatus {
+  NONE
+  PENDING
+  READY
   FAILED
 }

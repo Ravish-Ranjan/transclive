@@ -24,6 +24,7 @@
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
+  --color-record: var(--record);
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
@@ -73,6 +74,7 @@
   --chart-4: oklch(0.378 0.015 216);
   --chart-5: oklch(0.275 0.011 216.9);
   --radius: 0.625rem;
+  --record: oklch(0.705 0.176 47.8);
   --sidebar: oklch(0.987 0.002 197.1);
   --sidebar-foreground: oklch(0.148 0.004 228.8);
   --sidebar-primary: oklch(0.6 0.118 184.704);
@@ -81,9 +83,11 @@
   --sidebar-accent-foreground: oklch(0.218 0.008 223.9);
   --sidebar-border: oklch(0.925 0.005 214.3);
   --sidebar-ring: oklch(0.723 0.014 214.4);
+  --color-record: var(--record);
 }
 
 .dark {
+  --record: oklch(0.74 0.17 50);
   --background: oklch(0.148 0.004 228.8);
   --foreground: oklch(0.987 0.002 197.1);
   --card: oklch(0.218 0.008 223.9);
@@ -115,6 +119,25 @@
   --sidebar-accent-foreground: oklch(0.987 0.002 197.1);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.56 0.021 213.5);
+}
+
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+
+.animate-wave {
+  transform-origin: center;
+  animation-name: wave;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-wave {
+    animation: none;
+    transform: scaleY(0.7);
+  }
 }
 
 @layer base {
