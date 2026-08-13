@@ -19,7 +19,11 @@ if (process.env.NODE_ENV !== "development") {
 	app.set("trust proxy", 1);
 }
 
-app.use(helmet());
+app.use(
+	helmet({
+		crossOriginResourcePolicy: { policy: "cross-origin" },
+	}),
+);
 
 const allowedOrigins = process.env.ALLOWEDORIGINS
 	? process.env.ALLOWEDORIGINS.split(",")
