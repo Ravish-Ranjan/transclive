@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import {
 	MicIcon,
@@ -9,6 +11,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Waveform } from "@/components/dashboard/waveform";
+import { useAuth } from "@/context/AuthContext";
 
 const FEATURES = [
 	{
@@ -39,6 +42,9 @@ const FEATURES = [
 ];
 
 export default function LandingPage() {
+	const { user, loading } = useAuth();
+	const isAuthenticated = !loading && Boolean(user);
+
 	return (
 		<div className="min-h-screen">
 			<header className="mx-auto flex max-w-5xl items-center justify-between px-6 py-6">
@@ -51,16 +57,22 @@ export default function LandingPage() {
 					</span>
 				</Link>
 
-				<div className="flex items-center gap-2">
-					<Link href="/login">
-						<Button variant="ghost" size="sm">
-							Log in
-						</Button>
+				{isAuthenticated ? (
+					<Link href="/app">
+						<Button size="sm">Go to dashboard</Button>
 					</Link>
-					<Link href="/register">
-						<Button size="sm">Get started</Button>
-					</Link>
-				</div>
+				) : (
+					<div className="flex items-center gap-2">
+						<Link href="/login">
+							<Button variant="ghost" size="sm">
+								Log in
+							</Button>
+						</Link>
+						<Link href="/register">
+							<Button size="sm">Get started</Button>
+						</Link>
+					</div>
+				)}
 			</header>
 
 			<section className="mx-auto max-w-5xl px-6 pt-16 pb-24 sm:pt-24">
@@ -80,12 +92,14 @@ export default function LandingPage() {
 							so you can search it later.
 						</p>
 						<div className="mt-8 flex items-center gap-3">
-							<Link href="/register">
-								<Button size="lg">Start transcribing</Button>
+							<Link href={isAuthenticated ? "/app" : "/register"}>
+								<Button size="lg">
+									{isAuthenticated ? "Go to dashboard" : "Start transcribing"}
+								</Button>
 							</Link>
-							<Link href="/login">
+							<Link href={isAuthenticated ? "/app" : "/login"}>
 								<Button variant="outline" size="lg">
-									I have an account
+									{isAuthenticated ? "Open dashboard" : "I have an account"}
 								</Button>
 							</Link>
 						</div>
@@ -161,8 +175,10 @@ export default function LandingPage() {
 					Your next conversation, already written down
 				</h2>
 				<div className="mt-6">
-					<Link href="/register">
-						<Button size="lg">Create a free account</Button>
+					<Link href={isAuthenticated ? "/app" : "/register"}>
+						<Button size="lg">
+							{isAuthenticated ? "Go to dashboard" : "Create a free account"}
+						</Button>
 					</Link>
 				</div>
 			</section>

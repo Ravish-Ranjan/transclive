@@ -15,6 +15,7 @@ import {
 	register as registerRequest,
 	type User,
 } from "@/lib/auth";
+import { ApiError } from "@/lib/api";
 
 interface AuthContextValue {
 	user: User | null;
@@ -26,6 +27,43 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const AUTH_USER_STORAGE_KEY = "transclive.auth.user";
+
+function getStoredUser(): User | null {
+	if (typeof window === "undefined") {
+		return null;
+	}
+
+	const rawStoredUser = window.localStorage.getItem(AUTH_USER_STORAGE_KEY);
+
+	if (!rawStoredUser) {
+		return null;
+	}
+
+	try {
+		return JSON.parse(rawStoredUser) as User;
+	} catch (error) {
+		console.error("Failed to parse stored auth user", error);
+		window.localStorage.removeItem(AUTH_USER_STORAGE_KEY);
+		return null;
+	}
+}
+
+function persistUser(user: User) {
+	if (typeof window === "undefined") {
+		return;
+	}
+
+	window.localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(user));
+}
+
+function clearPersistedUser() {
+	if (typeof window === "undefined") {
+		return;
+	}
+
+	window.localStorage.removeItem(AUTH_USER_STORAGE_KEY);
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
 	const [user, setUser] = useState<User | null>(null);
@@ -36,8 +74,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 			const response = await getCurrentUser();
 
 			setUser(response.user);
-		} catch {
-			setUser(null);
+			persistUser(response.user);
+		} catch (error) {
+			if (error instanceof ApiError && error.status === 401) {
+				setUser(null);
+				clearPersistedUser();
+				return;
+			}
+
+			console.error("Failed to refresh authenticated user", error);
 		}
 	}
 
@@ -45,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		const response = await loginRequest(email, password);
 
 		setUser(response.user);
+		persistUser(response.user);
 
 		return response.user;
 	}
@@ -53,6 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		const response = await registerRequest(email, password);
 
 		setUser(response.user);
+		persistUser(response.user);
 
 		return response.user;
 	}
@@ -61,11 +108,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		await logoutRequest();
 
 		setUser(null);
+		clearPersistedUser();
 	}
 
 	useEffect(() => {
 		async function initializeAuth() {
 			try {
+				const storedUser = getStoredUser();
+
+				if (storedUser) {
+					setUser(storedUser);
+				}
+
 				await refreshUser();
 			} finally {
 				setLoading(false);

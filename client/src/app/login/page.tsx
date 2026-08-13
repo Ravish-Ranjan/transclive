@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
@@ -19,13 +19,19 @@ import {
 
 export default function LoginPage() {
 	const router = useRouter();
-	const { login } = useAuth();
+	const { user, loading: authLoading, login } = useAuth();
 
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState("");
+
+	useEffect(() => {
+		if (!authLoading && user) {
+			router.replace("/app");
+		}
+	}, [authLoading, user, router]);
 
 	async function handleSubmit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -45,6 +51,14 @@ export default function LoginPage() {
 		} finally {
 			setLoading(false);
 		}
+	}
+
+	if (authLoading || user) {
+		return (
+			<main className="flex min-h-screen items-center justify-center">
+				<p className="text-sm text-muted-foreground">Redirecting...</p>
+			</main>
+		);
 	}
 
 	return (
