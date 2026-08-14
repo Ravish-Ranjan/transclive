@@ -25,7 +25,15 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-
+const statues = {
+	recording: "Stop Recording",
+	connecting: "Connecting...",
+	stopping: "Stopping...",
+	saving: "Saving transcription...",
+	summarizing: "Generating summary...",
+	ready: "Recording saved",
+	idle: "Start Recording",
+};
 export default function AppHomePage() {
 	const router = useRouter();
 	const { user, loading: authLoading } = useAuth();
@@ -43,6 +51,10 @@ export default function AppHomePage() {
 		error,
 		start,
 		stop,
+		status,
+		isSummarizing,
+		retrySummary,
+		summaryError
 	} = useTranscription({ language: language.code });
 
 	useEffect(() => {
@@ -82,7 +94,9 @@ export default function AppHomePage() {
 						<div className="flex items-center gap-2 text-xs text-muted-foreground">
 							<span
 								className={`h-1.5 w-1.5 rounded-full ${
-									isConnected ? "bg-primary" : "bg-muted-foreground"
+									isConnected
+										? "bg-primary"
+										: "bg-muted-foreground"
 								}`}
 							/>
 							{isConnected ? "Connected" : "Disconnected"}
@@ -91,7 +105,9 @@ export default function AppHomePage() {
 
 					<CardContent className="space-y-6">
 						<div className="space-y-2">
-							<label className="text-xs font-medium">Language</label>
+							<label className="text-xs font-medium">
+								Language
+							</label>
 
 							<Select
 								value={language.code}
@@ -101,7 +117,12 @@ export default function AppHomePage() {
 									);
 									if (found) setLanguage(found);
 								}}
-								disabled={isRecording}
+								disabled={
+									status === "connecting" ||
+									status === "stopping" ||
+									status === "saving" ||
+									status === "summarizing"
+								}
 							>
 								<SelectTrigger className="w-full">
 									<SelectValue placeholder="Select language" />
@@ -109,7 +130,10 @@ export default function AppHomePage() {
 
 								<SelectContent>
 									{transcriptionLanguages.map((item) => (
-										<SelectItem key={item.code} value={item.code}>
+										<SelectItem
+											key={item.code}
+											value={item.code}
+										>
 											{item.name}
 										</SelectItem>
 									))}
@@ -120,14 +144,64 @@ export default function AppHomePage() {
 						<div className="flex flex-col items-center gap-4 rounded-lg border border-border bg-muted/40 py-8">
 							<div
 								className={
-									isRecording ? "text-record" : "text-muted-foreground"
+									isRecording
+										? "text-record"
+										: "text-muted-foreground"
 								}
 							>
-								<Waveform active={isRecording} className="h-8" />
+								<Waveform
+									active={isRecording}
+									className="h-8"
+								/>
 							</div>
+							<div className="text-sm text-muted-foreground">
+								{status === "connecting" &&
+									"Connecting to transcription service..."}
+								{status === "recording" && "Recording..."}
+								{status === "stopping" &&
+									"Stopping recording..."}
+								{status === "saving" &&
+									"Saving transcription..."}
+								{status === "summarizing" &&
+									"Generating summary..."}
+								{status === "ready" &&
+									"Transcription saved successfully."}
+								{status === "summary_failed" && (
+									<div className="flex flex-col items-center gap-2">
+										<p className="text-sm text-destructive">
+											We couldn&apos;t generate the summary.
+										</p>
 
+										{summaryError && (
+											<p className="text-xs text-muted-foreground">
+												{summaryError}
+											</p>
+										)}
+
+										<Button
+											variant="outline"
+											onClick={retrySummary}
+											disabled={isSummarizing}
+										>
+											{isSummarizing
+												? "Retrying..."
+												: "Retry Summary"}
+										</Button>
+									</div>
+								)}{" "}
+							</div>
 							{isRecording ? (
-								<Button variant="destructive" size="lg" onClick={stop}>
+								<Button
+									variant="destructive"
+									size="lg"
+									onClick={stop}
+									disabled={
+										status === "connecting" ||
+										status === "stopping" ||
+										status === "saving" ||
+										status === "summarizing"
+									}
+								>
 									Stop recording
 								</Button>
 							) : (
@@ -138,14 +212,24 @@ export default function AppHomePage() {
 										await start();
 										setIsConnecting(false);
 									}}
-									disabled={isConnecting}
+									disabled={
+										status === "connecting" ||
+										status === "stopping" ||
+										status === "saving" ||
+										status === "summarizing"
+									}
 								>
-									{isConnecting ? "Connecting..." : "Start recording"}
+									{isConnecting
+										? "Connecting..."
+										: "Start recording"}
 								</Button>
 							)}
 
 							{isRecording && (
-								<Badge variant="destructive" className="gap-1.5">
+								<Badge
+									variant="destructive"
+									className="gap-1.5"
+								>
 									<span className="size-1.5 animate-pulse rounded-full bg-current" />
 									Recording
 								</Badge>
@@ -172,18 +256,25 @@ export default function AppHomePage() {
 											{segment.speaker !== undefined && (
 												<>
 													<span>•</span>
-													<span>Speaker {segment.speaker + 1}</span>
+													<span>
+														Speaker{" "}
+														{segment.speaker + 1}
+													</span>
 												</>
 											)}
 										</div>
-										<p className="text-sm leading-6">{segment.text}</p>
+										<p className="text-sm leading-6">
+											{segment.text}
+										</p>
 									</div>
 								))}
 
 								{interimSegment && (
 									<div className="space-y-1 opacity-60">
 										<div className="text-[0.65rem] text-muted-foreground">
-											{formatTimestamp(interimSegment.start)}
+											{formatTimestamp(
+												interimSegment.start,
+											)}
 										</div>
 										<p className="text-sm leading-6">
 											{interimSegment.text}
@@ -193,15 +284,18 @@ export default function AppHomePage() {
 							</div>
 						)}
 
-						{!isRecording && segments.length === 0 && !interimSegment && (
-							<p className="text-center text-xs text-muted-foreground">
-								Press start and speak. Your saved recordings show up in{" "}
-								<Link href="/history" className="underline">
-									History
-								</Link>
-								.
-							</p>
-						)}
+						{!isRecording &&
+							segments.length === 0 &&
+							!interimSegment && (
+								<p className="text-center text-xs text-muted-foreground">
+									Press start and speak. Your saved recordings
+									show up in{" "}
+									<Link href="/history" className="underline">
+										History
+									</Link>
+									.
+								</p>
+							)}
 					</CardContent>
 				</Card>
 			</div>

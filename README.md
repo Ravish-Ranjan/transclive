@@ -1,256 +1,567 @@
-# Transclive
+# TransClive — Real-Time Audio Transcriber
 
-Transclive is a real-time audio transcription platform that uses Deepgram for streaming speech-to-text and an AI summarization service to generate summaries and titles for transcriptions. It provides a Next.js client and an Express + TypeScript server that persist transcriptions with Prisma/Postgres and supports real-time WebSocket streaming for microphone audio ingestion.
+TransClive is a full-stack real-time audio transcription application built for the Full Stack assessment.
 
-- Repository root: .
-- Client app: [client/](./client)
-- Server app: [server/](./server)
-
-Table of contents
-
-- Project overview
-- Features
-- Architecture & important files
-- Tech stack
-- Getting started (development)
-- Environment variables
-- Database (Prisma)
-- Running (development & production)
-- API reference (quick)
-- WebSocket protocol (transcription)
-- Security & secrets
-- Contributing
-- License
-
-## Project overview
-
-Transclive provides a web client for recording audio (browser microphone), streams binary audio frames to the server over a WebSocket, forwards the audio to Deepgram for live transcription, persists final segments to a Postgres database, and supports generating an AI-produced summary/title for saved transcriptions.
+It lets authenticated users record microphone audio, see live transcription results, persist finalized transcripts, search and manage transcript history, and automatically generate an AI summary after a recording is saved.
 
 ## Features
 
-- Real-time streaming transcription via WebSocket (/ws/transcribe)
-- Deepgram integration for speech-to-text (streaming)
-- Persistent storage of transcriptions and segments in Postgres via Prisma
-- User authentication (email/password) with cookie-based auth_token
-- AI-powered summarization endpoint to create title + summary from transcript text
-- Health endpoint and Prisma Studio for DB inspection
+### Authentication
 
-## Architecture & important files
+- User registration and login
+- Logout
+- Protected transcription APIs
+- HTTP-only cookie-based authentication
+- Password hashing
+- Per-user transcript ownership
 
-- Server
-    - [server/src/server.ts](./server/src/server.ts) - HTTP server bootstrap
-    - [server/src/app.ts](./server/src/app.ts) - Express app (routes & middleware)
-    - [server/src/services/transcription.websocket.ts](./server/src/services/transcription.websocket.ts) - WebSocket handling and Deepgram integration
-    - [server/prisma/schema.prisma](./server/prisma/schema.prisma) - Prisma schema (DB models)
-    - [server/src/controllers/auth.controller.ts](./server/src/controllers/auth.controller.ts) - auth endpoints and cookie management
-    - [server/src/controllers/transcription.controller.ts](./server/src/controllers/transcription.controller.ts) - CRUD & summary generation
-- Client
-    - [client/](./client) - Next.js app
-    - [client/next.config.ts](./client/next.config.ts)
+### Real-time transcription
 
-## Tech stack
+- Browser microphone capture
+- Start / Stop recording
+- Real-time Deepgram transcription
+- Interim transcription results
+- Finalized transcript segments
+- Speaker diarization
+- Speaker labels
+- Timestamped transcript segments
+- Language selection
+- Recording duration
 
-- Frontend: Next.js 16 (React 19), Tailwind CSS, shadcn, TypeScript
-- Backend: Node.js, Express, TypeScript, Prisma ORM
-- Database: PostgreSQL (any provider supported by Prisma)
-- Streaming & Speech-to-Text: Deepgram SDK
-- AI summarization: External AI API (configured by AI_API_KEY)
-- Auth: Cookie-based JWT tokens, password hashing with Argon2
+### Transcript management
 
-## Getting started (development)
+- Persistent PostgreSQL storage through Prisma
+- Transcript history
+- Search through saved transcripts
+- Pagination
+- Transcript detail page
+- Rename transcript
+- Delete transcript
+- Word count
+- Transcript metadata
 
-Prerequisites
+### AI summary
 
-- Node.js (recommend Node 18+ or latest LTS)
-- npm (or yarn)
-- PostgreSQL instance (local or managed) or a connection string
+- Automatic summary generation after transcription is saved
+- AI-generated title and summary
+- Summary status handling
+- Summary failure does not invalidate the saved transcript
+- Summary retry support
 
-Clone the repo
+### UX / reliability
+
+- Explicit recording lifecycle states
+- Microphone and connection error handling
+- Separate transcription persistence and summary generation
+- Empty-state handling
+- Loading/saving/summarizing feedback
+
+---
+
+## Architecture
+
+```text
+                         ┌─────────────────────────┐
+                         │        Next.js          │
+                         │                         │
+                         │  Authentication UI      │
+                         │  Recorder UI            │
+                         │  Live Transcript        │
+                         │  History                │
+                         │  Transcript Detail      │
+                         └────────────┬────────────┘
+                                      │
+                            REST / HTTP + Cookie
+                                      │
+                         ┌────────────▼────────────┐
+                         │      Express API        │
+                         │                         │
+                         │  Auth                   │
+                         │  Transcript APIs        │
+                         │  Persistence             │
+                         │  Summary service         │
+                         └─────────┬──────┬─────────┘
+                                   │      │
+                            Prisma │      │ AI API
+                                   │      │
+                         ┌─────────▼─┐  ┌─▼──────────┐
+                         │ PostgreSQL │  │ AI Service │
+                         └────────────┘  └────────────┘
+
+
+REAL-TIME PATH
+
+┌───────────────┐       WebSocket       ┌──────────────┐
+│   Browser     │ ◄────────────────────► │   Deepgram   │
+│               │                        │     STT      │
+│ Microphone    │ ───── audio ─────────►│              │
+│ Transcript UI │ ◄── interim/final ────│              │
+└───────┬───────┘                        └──────────────┘
+        │
+        │ finalized transcript
+        ▼
+┌──────────────────┐
+│ Express / Prisma │
+│ PostgreSQL       │
+└──────────────────┘
+```
+
+The real-time transcription path is kept separate from application persistence. The backend is responsible for authentication, authorization, persistence, and summary generation rather than acting as an unnecessary audio proxy.
+
+The permanent Deepgram API key is kept server-side.
+
+---
+
+## Recording Flow
+
+```text
+User selects language
+        ↓
+Start recording
+        ↓
+Request microphone permission
+        ↓
+Connect to Deepgram
+        ↓
+Stream microphone audio
+        ↓
+Receive interim + final results
+        ↓
+User clicks Stop
+        ↓
+Finalize Deepgram stream
+        ↓
+Persist finalized transcript
+        ↓
+Return transcription ID
+        ↓
+Automatically request summary
+        ↓
+Store title + summary
+```
+
+Transcript persistence and AI summarization are deliberately separate operations. A summary failure does not delete or invalidate the transcript.
+
+---
+
+## Recording State
+
+The frontend models the recording lifecycle explicitly:
+
+```text
+IDLE
+  ↓
+CONNECTING
+  ↓
+RECORDING
+  ↓
+STOPPING
+  ↓
+SAVING
+  ↓
+SUMMARIZING
+  ↓
+READY
+```
+
+Failure states are handled separately so that the UI can distinguish transcription/persistence problems from summary-generation problems.
+
+---
+
+## Technology Stack
+
+| Layer               | Technology                      |
+| ------------------- | ------------------------------- |
+| Frontend            | Next.js                         |
+| UI                  | React + TypeScript              |
+| Styling             | Tailwind CSS + shadcn/ui        |
+| Backend             | Node.js + Express               |
+| Backend language    | TypeScript                      |
+| Database            | PostgreSQL                      |
+| ORM                 | Prisma                          |
+| Real-time STT       | Deepgram WebSocket              |
+| Authentication      | HTTP-only cookie authentication |
+| Password hashing    | Argon2/bcrypt                   |
+| Validation          | Server-side validation          |
+| AI summary          | Provider-backed summary service |
+| API                 | REST                            |
+| Real-time transport | WebSocket                       |
+
+---
+
+## Project Structure
+
+```text
+transclive/
+├── client/
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── login/
+│   │   │   ├── register/
+│   │   │   ├── history/
+│   │   │   └── history/[id]/
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   └── lib/
+│   └── package.json
+│
+├── server/
+│   ├── prisma/
+│   ├── src/
+│   │   ├── controllers/
+│   │   ├── middleware/
+│   │   ├── routes/
+│   │   ├── services/
+│   │   └── ...
+│   └── package.json
+│
+└── README.md
+```
+
+---
+
+## Local Setup
+
+### Prerequisites
+
+- Node.js 18+
+- npm
+- PostgreSQL
+- A Deepgram API key
+- An API key/configuration for the configured AI summary provider
+
+### 1. Clone the repository
+
 ```bash
-git clone <repo-url>
+git clone https://github.com/Ravish-Ranjan/transclive.git
 cd transclive
 ```
-Install dependencies
 
-# root (concurrently)
+### 2. Configure the backend
+
 ```bash
+cd server
 npm install
 ```
-# client
+
+Create the backend environment file according to the variables used by the project.
+
+Example:
+
+```env
+DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DATABASE"
+DEEPGRAM_API_KEY="your-deepgram-key"
+AI_API_KEY="your-ai-provider-key"
+NODE_ENV="development"
+```
+
+Run Prisma migrations/generation as required by the current project:
+
 ```bash
-npm --prefix client install
+npx prisma generate
+npx prisma migrate dev
 ```
-# server
+
+Start the backend:
+
 ```bash
-npm --prefix server install
-```
-Environment
-
-- Environment variables are required for the server and client. Example files are NOT included with secrets — create your own.
-
-Example server .env (do NOT commit secrets):
-```
-DATABASE_URL=postgresql://USER:PASS@HOST:PORT/DATABASE
-DEEPGRAM_API_KEY=your_deepgram_api_key
-AUTH_SECRET=a_random_secret_for_jwt_signing
-AI_API_KEY=your_ai_service_api_key
-CLIENT_URL=http://localhost:3000
-PORT=8016
-NODE_ENV=development
-ALLOWEDORIGINS=http://localhost:3000
-```
-Example client .env.local:
-
-NEXT_PUBLIC_API_URL=http://localhost:8016
-
-See [server/.env.production](./server/.envexample.production) for an example layout (do not reuse secrets from there).
-
-## Database (Prisma)
-
-The database schema lives at [server/prisma/schema.prisma](./server/prisma/schema.prisma). Main models:
-
-- User: id, email, passwordHash, timestamps
-- Transcription: id, userId, title, language, duration, status, summary, summaryStatus, timestamps
-- TranscriptSegment: id, transcriptionId, text, start, end, speaker, confidence
-
-Prisma helper scripts (from server package.json)
-
-- npm --prefix server run prisma:generate # generate Prisma client
-- npm --prefix server run prisma:migrate # run migrations (development)
-- npm --prefix server run prisma:studio # open Prisma Studio
-
-Run migrations (local dev)
-
-cd server
-npm run prisma:generate
-npm run prisma:migrate
-
-## Running the project
-
-Development
-
-# runs both client and server concurrently from repo root
-
 npm run dev
+```
 
-Or run independently
+The development backend runs on port `816`.
 
-npm --prefix client run dev # Next dev server (default port 3000)
-npm --prefix server run dev # server (default port from env or 8000)
+### 3. Configure the frontend
 
-Production (build & start)
+```bash
+cd ../client
+npm install
+```
 
-# Build both
+Configure the API URL:
 
-npm --prefix client run build
-npm --prefix server run build
+```env
+NEXT_PUBLIC_API_URL="http://localhost:816"
+```
 
-# Start server and client separately (example)
+Start the frontend:
 
-npm --prefix server run start
-npm --prefix client run start
+```bash
+npm run dev
+```
 
-Notes: server dev uses tsx: "tsx watch src/server.ts" — ensure dev dependencies for server are installed.
+Then open the Next.js development URL shown by the terminal, normally:
 
-## API reference (quick)
+```text
+http://localhost:3000
+```
 
-Base API URL: ${NEXT_PUBLIC_API_URL} (default from client/.env.local)
+> If the project uses additional environment variables, copy them from the repository's `.env.example` and fill in the required values. Never commit real credentials.
 
-- GET /api/health
-    - Health check, also verifies DB connection
+---
 
-- Auth
-    - POST /api/auth/register { email, password } -> registers user and sets auth cookie
-    - POST /api/auth/login { email, password } -> logs in and sets auth cookie
-    - POST /api/auth/logout -> clears auth cookie
-    - GET /api/auth/me (requires auth) -> returns current user
+## Environment Variables
 
-- Transcriptions (/api/transcriptions)
-    - GET /api/transcriptions?search=... (requires auth) -> list
-    - POST /api/transcriptions/:id/summary (requires auth) -> generate summary/title via AI
-    - GET /api/transcriptions/:id (requires auth) -> get transcription + segments
-    - DELETE /api/transcriptions/:id (requires auth) -> delete transcription
-    - PATCH /api/transcriptions/:id/title (requires auth) -> rename transcription
+Backend: look in [here](server/.envexample.production)
 
-See implementation at [server/src/controllers](./server/src/controllers)
+```text
+DATABASE_URL="<datbase-url>"
+DEEPGRAM_API_KEY="<deepgram-api-key>"
+AUTH_SECRET="<super-secret-auth-key>"
+AI_API_KEY="<ai-api-key>"
+CLIENT_URL="http://localhost:3000"
+PORT=<port>
+NODE_ENV="production"
+ALLOWEDORIGINS="list,of,allowed,origins"
+```
 
-## WebSocket protocol (transcription)
+Frontend:
 
-Endpoint (relative to server host): /ws/transcribe
+```text
+NEXT_PUBLIC_API_URL
+```
 
-Authentication
+Secrets must remain outside source control.
 
-- Clients must present a valid auth cookie named `auth_token` on the WebSocket connection request. The server verifies this token before accepting the connection.
+---
 
-Client -> Server messages
+## API Overview
 
-- Binary frames: audio chunks from the browser microphone (raw audio as binary WebSocket frames). These are forwarded to Deepgram.
-- JSON control messages (text frames):
-    - Start recording:
-      { "type": "start", "language": "en-US" }
-        - language optional, defaults to "en-US"
-    - Stop recording:
-      { "type": "stop" }
+### Authentication
 
-Server -> Client JSON messages
+```http
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/auth/me
+```
 
-- { type: "ready" } - deepgram connection opened and server ready to receive audio
-- { type: "transcript", segment: {...}, isFinal: boolean, speechFinal: boolean } - incremental or final segment
-- { type: "utterance_end", lastWordEnd: number } - utterance ended
-- { type: "transcription_saved", transcription: { id, language, duration, createdAt } } - saved DB record when deepgram connection closed
-- { type: "deepgram_closed" } - deepgram connection closed
-- { type: "stopping" } - server is stopping recording session
-- { type: "error", message: "..." } - errors
+### Transcriptions
 
-Important: audio frames must be sent as binary WebSocket frames. The server expects the Deepgram SDK to receive media via deepgramConnection.sendMedia(bytes).
+```http
+GET    /api/transcriptions
+GET    /api/transcriptions/:id
+PATCH  /api/transcriptions/:id
+DELETE /api/transcriptions/:id
+```
 
-## Security & secrets
+### Summary
 
-- Do NOT commit secrets into the repository. Keep environment variables (API keys, DATABASE_URL, AUTH_SECRET, AI_API_KEY) out of source control.
-- The server sets the `auth_token` cookie as HTTP-only and sets the secure flag in production.
-- The server reads CORS allowed origins from ALLOWEDORIGINS (comma separated) — set this appropriately in production.
+```http
+POST /api/transcriptions/:id/summary
+```
 
-Recommended env keys (server)
+The summary endpoint is also triggered automatically after a successful transcription save.
 
-- DATABASE_URL (Postgres connection string)
-- DEEPGRAM_API_KEY
-- AUTH_SECRET (jwt signing secret)
-- AI_API_KEY (used when generating summaries)
-- CLIENT_URL
-- PORT
-- NODE_ENV
-- ALLOWEDORIGINS
+---
 
-Client
+## Data Model
 
-- NEXT_PUBLIC_API_URL (base API URL used by the client)
+The core relationship is:
 
-## Development notes & troubleshooting
+```text
+User
+ │
+ └── 1:N
+      │
+      └── Transcription
+```
 
-- If WebSocket authentication fails, verify the browser has the `auth_token` cookie set from login/register and the cookie domain/path is correct.
-- If Deepgram streaming fails, confirm DEEPGRAM_API_KEY and network connectivity. The server logs Deepgram errors.
-- For database issues, check DATABASE_URL and run Prisma Studio: `npm --prefix server run prisma:studio`.
-- To regenerate Prisma client after schema changes: `npm --prefix server run prisma:generate`.
+A transcription contains information such as:
 
-## Contributing
+- owner/user ID
+- title
+- language
+- transcript text
+- structured segments
+- speaker information
+- timestamps
+- duration
+- word count
+- summary
+- summary/persistence status
+- creation/update timestamps
 
-1. Fork the repository
-2. Create a feature branch: git checkout -b feat/your-feature
-3. Install & run tests (if any)
-4. Open a PR describing changes
+Every transcript access, update, and delete operation is authorized against the authenticated user.
 
-Please keep changes focused and include tests or manual verification steps for behavioral changes.
+---
 
-## License
+## Important Engineering Decisions
 
-This project uses GPL-2.0 as specified in package.json.
+### 1. Finalized segments are persisted
 
-## Contact / Maintainer
+Interim Deepgram results are used for the live UI but are not repeatedly persisted.
 
-Maintainer: Ravish Ranjan
+This avoids duplicate transcript text and unnecessary database/network traffic.
 
-Files to inspect while developing
+### 2. Structured transcript segments
 
-- [server/src/services/transcription.websocket.ts](./server/src/services/transcription.websocket.ts) (WebSocket & deepgram flow)
-- [server/prisma/schema.prisma](./server/prisma/schema.prisma) (DB models)
-- [client/next.config.ts](./client/next.config.ts)
+The application retains structured segment information rather than relying only on a single large string.
+
+A segment can contain:
+
+```json
+{
+	"text": "Hello, how are you?",
+	"speaker": 0,
+	"start": 0.42,
+	"end": 2.1
+}
+```
+
+This makes speaker rendering, timestamps, metadata, and future transcript processing easier.
+
+### 3. Summary generation is independent
+
+The transcript is saved before summary generation begins:
+
+```text
+Transcript saved
+      ↓
+Summary requested
+      ↓
+AI service
+      ↓
+Summary stored
+```
+
+Therefore an AI failure does not destroy a successfully saved transcript.
+
+### 4. User isolation
+
+The authenticated user identity is obtained from the server-side authentication context.
+
+The application does not trust a client-supplied user ID for authorization.
+
+### 5. Server-side secrets
+
+The permanent Deepgram API key is never placed in frontend source code.
+
+---
+
+## Implemented Requirements
+
+### P0 — Mandatory
+
+- [x] Authentication
+- [x] Microphone permission handling
+- [x] Start recording
+- [x] Stop recording
+- [x] Real-time transcription
+- [x] Interim transcription results
+- [x] Final transcription results
+- [x] Backend persistence after Stop
+- [x] Persistent transcript history
+- [x] Error handling
+- [x] Secure Deepgram API-key handling
+
+### P1 — Recommended
+
+- [x] Transcript history page
+- [x] Transcript detail page
+- [x] Transcript deletion
+- [x] Transcript renaming
+- [x] Speaker diarization
+- [x] Timestamps
+- [x] Transcript search
+- [x] Recording duration
+- [x] Word count
+- [x] AI-generated summary
+- [x] Language selection
+- [x] Recording/session states
+- [x] Summary retry handling
+
+### P2 — Optional
+
+The following are intentionally not required for the assessment's core completion:
+
+- [ ] IndexedDB interrupted-session recovery
+- [ ] TXT/JSON export
+- [ ] Copy transcript
+- [ ] Keyboard shortcuts
+- [ ] Advanced accessibility improvements
+- [ ] More advanced language configuration
+- [ ] Transcript editing
+- [ ] Automatic title generation as a separate feature
+
+---
+
+## Assumptions
+
+- The initial application targets browser-based microphone recording.
+- Language is selected before recording begins.
+- Speaker labels represent diarized speaker IDs rather than real identities.
+- Transcript persistence occurs after the recording is stopped.
+- AI summarization is asynchronous relative to transcript persistence.
+- PostgreSQL is sufficient for the expected assessment-scale search workload.
+- Permanent third-party API credentials are stored only on the backend.
+- The application is intended for normal authenticated users rather than a complex role/permission hierarchy.
+
+---
+
+## Known Limitations / Future Improvements
+
+The assessment is focused on completing the core product rather than implementing every production-hardening enhancement.
+
+Potential next improvements include:
+
+1. Idempotent save/session IDs for robust retry-safe persistence.
+2. Full automatic recovery from browser/network interruption.
+3. Automated unit, integration, and end-to-end test coverage.
+4. More extensive accessibility testing.
+5. Transcript export and copy actions.
+6. Transcript editing.
+7. Production observability and metrics.
+8. More extensive validation and rate limiting.
+9. Large-transcript virtualization and optimized search for higher scale.
+
+These are deliberately secondary to the completed P0/P1 functionality.
+
+---
+
+## Testing Checklist
+
+- [x] Register a new user
+- [x] Log in
+- [x] Start recording
+- [x] Allow microphone access
+- [x] Confirm interim transcription appears
+- [x] Confirm final transcription appears
+- [x] Stop recording
+- [x] Confirm transcript is saved
+- [x] Confirm summary generation starts automatically
+- [x] Confirm summary is stored
+- [x] Open History
+- [x] Search for a transcript
+- [x] Open transcript detail
+- [x] Rename transcript
+- [x] Refresh and confirm rename persisted
+- [x] Delete transcript
+- [x] Confirm it disappears from history
+- [x] Test microphone denial
+- [x] Test invalid login
+- [x] Confirm another user cannot access the transcript
+
+---
+
+## AI Usage
+
+AI tools were used during development for implementation assistance, debugging, architecture discussion, and documentation.
+
+The resulting application was assembled and integrated specifically for this assessment repository. AI assistance does not replace the project's application-specific implementation, configuration, testing, or integration work.
+
+---
+
+## Assessment Context
+
+This repository was created as part of a Full Stack assessment requiring a real-time audio transcription application.
+
+The implementation prioritizes:
+
+- real-time behavior
+- clean separation of concerns
+- authenticated user isolation
+- persistence
+- explicit failure states
+- practical architecture
+- maintainability
+- secure handling of third-party credentials

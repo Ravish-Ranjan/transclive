@@ -16,7 +16,11 @@ interface StopMessage {
 	type: "stop";
 }
 
-type ClientMessage = StartMessage | StopMessage;
+interface RetrySaveMessage {
+	type: "retry_save";
+}
+
+type ClientMessage = StartMessage | StopMessage | RetrySaveMessage;
 
 export function setupTranscriptionWebSocket(httpServer: HttpServer) {
 	const wss = new WebSocketServer({
@@ -55,6 +59,55 @@ export function setupTranscriptionWebSocket(httpServer: HttpServer) {
 		let sessionLanguage = "en-US";
 		let sessionStartedAt: number | null = null;
 		let sessionSegments: TranscriptSegment[] = [];
+		let transcriptionSaved = false;
+
+		const saveTranscription = async () => {
+			if (transcriptionSaved || sessionSegments.length === 0) {
+				return false;
+			}
+
+			try {
+				const duration =
+					sessionStartedAt !== null
+						? (Date.now() - sessionStartedAt) / 1000
+						: 0;
+
+				const transcription = await createTranscription({
+					userId,
+					language: sessionLanguage,
+					duration,
+					segments: sessionSegments,
+				});
+
+				transcriptionSaved = true;
+
+				if (socket.readyState === WebSocket.OPEN) {
+					socket.send(
+						JSON.stringify({
+							type: "transcription_saved",
+							transcription: {
+								id: transcription.id,
+								language: transcription.language,
+								duration: transcription.duration,
+								createdAt: transcription.createdAt,
+							},
+						}),
+					);
+				}
+
+				return true;
+			} catch (error) {
+				console.error("Failed to save transcription:", error);
+
+				sendError(
+					socket,
+					"Failed to save transcription",
+					"TRANSCRIPTION_SAVE_FAILED",
+				);
+
+				return false;
+			}
+		};
 
 		socket.on("message", async (data, isBinary) => {
 			try {
@@ -99,6 +152,7 @@ export function setupTranscriptionWebSocket(httpServer: HttpServer) {
 					}
 
 					stopping = false;
+					transcriptionSaved = false;
 
 					sessionLanguage = message.language ?? "en-US";
 					sessionStartedAt = Date.now();
@@ -114,6 +168,11 @@ export function setupTranscriptionWebSocket(httpServer: HttpServer) {
 						},
 					);
 
+					return;
+				}
+
+				if (message.type === "retry_save") {
+					await saveTranscription();
 					return;
 				}
 
@@ -238,37 +297,13 @@ export function setupTranscriptionWebSocket(httpServer: HttpServer) {
 				stopping = false;
 
 				if (sessionStartedAt !== null && sessionSegments.length > 0) {
-					try {
-						const duration = (Date.now() - sessionStartedAt) / 1000;
-						const transcription = await createTranscription({
-							userId,
-							language: sessionLanguage,
-							duration,
-							segments: sessionSegments,
-						});
-
-						if (clientSocket.readyState === WebSocket.OPEN) {
-							clientSocket.send(
-								JSON.stringify({
-									type: "transcription_saved",
-									transcription: {
-										id: transcription.id,
-										language: transcription.language,
-										duration: transcription.duration,
-										createdAt: transcription.createdAt,
-									},
-								}),
-							);
-						}
-					} catch (error) {
-						console.error("Failed to save transcription:", error);
-
-						sendError(clientSocket, "Failed to save transcription");
-					}
+					await saveTranscription();
 				}
 
-				sessionStartedAt = null;
-				sessionSegments = [];
+				if (transcriptionSaved) {
+					sessionStartedAt = null;
+					sessionSegments = [];
+				}
 
 				if (clientSocket.readyState === WebSocket.OPEN) {
 					clientSocket.send(
@@ -288,12 +323,17 @@ export function setupTranscriptionWebSocket(httpServer: HttpServer) {
 	console.log("Transcription WebSocket available at /ws/transcribe");
 }
 
-function sendError(socket: WebSocket, message: string) {
+function sendError(
+	socket: WebSocket,
+	message: string,
+	code?: string,
+) {
 	if (socket.readyState === WebSocket.OPEN) {
 		socket.send(
 			JSON.stringify({
 				type: "error",
 				message,
+				...(code ? { code } : {}),
 			}),
 		);
 	}

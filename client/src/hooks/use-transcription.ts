@@ -6,6 +6,17 @@ interface UseTranscriptionOptions {
 	language?: string;
 }
 
+export type TranscriptionStatus =
+	| "idle"
+	| "connecting"
+	| "recording"
+	| "stopping"
+	| "saving"
+	| "summarizing"
+	| "ready"
+	| "save_failed"
+	| "summary_failed";
+
 type ServerMessage =
 	| { type: "ready" }
 	| {
@@ -14,12 +25,23 @@ type ServerMessage =
 			isFinal: boolean;
 			speechFinal: boolean;
 	  }
-	| { type: "error"; message: string }
+	| {
+			type: "transcription_saved";
+			transcription: {
+				id: string;
+			};
+	  }
+	| { type: "error"; message: string; code?: string }
 	| { type: "utterance_end"; lastWordEnd: number }
 	| { type: "deepgram_closed" }
 	| { type: "stopping" };
 
 type TranscriptMessage = Extract<ServerMessage, { type: "transcript" }>;
+
+type TranscriptionSavedMessage = Extract<
+	ServerMessage,
+	{ type: "transcription_saved" }
+>;
 
 interface TranscriptSegment {
 	text: string;
@@ -46,11 +68,22 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 
 	const [isConnected, setIsConnected] = useState(false);
 	const [isRecording, setIsRecording] = useState(false);
-	// const [transcript, setTranscript] = useState("");
+
+	const [status, setStatus] = useState<TranscriptionStatus>("idle");
 	const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+
 	const [interimSegment, setInterimSegment] =
 		useState<TranscriptSegment | null>(null);
+
 	const [error, setError] = useState<string | null>(null);
+
+	const [savedTranscriptionId, setSavedTranscriptionId] = useState<
+		string | null
+	>(null);
+
+	const [isSummarizing, setIsSummarizing] = useState(false);
+
+	const [summaryError, setSummaryError] = useState<string | null>(null);
 
 	function handleTranscript(data: TranscriptMessage) {
 		if (!data.segment.text) {
@@ -66,6 +99,90 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 		}
 	}
 
+	async function generateSummary(transcriptionId: string) {
+		try {
+			setIsSummarizing(true);
+			setSummaryError(null);
+			setStatus("summarizing");
+
+			const apiUrl =
+				process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:816";
+
+			const response = await fetch(
+				`${apiUrl}/api/transcriptions/${transcriptionId}/summary`,
+				{
+					method: "POST",
+					credentials: "include",
+					headers: {
+						"Content-Type": "application/json",
+					},
+				},
+			);
+
+			const data = await response.json();
+
+			if (!response.ok) {
+				throw new Error(data?.message ?? "Failed to generate summary");
+			}
+
+			setStatus("ready");
+
+			return data;
+		} catch (error) {
+			const message =
+				error instanceof Error
+					? error.message
+					: "Failed to generate summary";
+
+			setSummaryError(message);
+			setStatus("summary_failed");
+
+			console.error("Failed to generate summary:", error);
+
+			return null;
+		} finally {
+			setIsSummarizing(false);
+		}
+	}
+
+	const retrySummary = useCallback(() => {
+		if (!savedTranscriptionId) {
+			return;
+		}
+
+		void generateSummary(savedTranscriptionId);
+	}, [savedTranscriptionId]);
+
+	const retrySave = useCallback(() => {
+		const socket = socketRef.current;
+
+		if (!socket || socket.readyState !== WebSocket.OPEN) {
+			setError("Connection to transcription server was lost");
+			return;
+		}
+
+		setError(null);
+		setStatus("saving");
+
+		socket.send(
+			JSON.stringify({
+				type: "retry_save",
+			}),
+		);
+	}, []);
+
+	function handleTranscriptionSaved(data: TranscriptionSavedMessage) {
+		const transcriptionId = data.transcription.id;
+
+		setSavedTranscriptionId(transcriptionId);
+
+		setStatus("summarizing");
+
+		// The transcript is already safely stored.
+		// Summary generation is a separate operation.
+		void generateSummary(transcriptionId);
+	}
+
 	function handleServerMessage(data: ServerMessage) {
 		switch (data.type) {
 			case "ready":
@@ -75,11 +192,21 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 				handleTranscript(data);
 				break;
 
+			case "transcription_saved":
+				handleTranscriptionSaved(data);
+				break;
+
 			case "stopping":
+				setStatus("saving");
 				break;
 
 			case "error":
 				setError(data.message);
+
+				if (data.code === "TRANSCRIPTION_SAVE_FAILED") {
+					setStatus("save_failed");
+				}
+
 				break;
 
 			case "deepgram_closed":
@@ -97,7 +224,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 	const connect = useCallback(() => {
 		return new Promise<WebSocket>((resolve, reject) => {
 			const apiUrl =
-				process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:816";
+				process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8016";
 
 			const websocketUrl = apiUrl
 				.replace(/^http:/, "ws:")
@@ -140,9 +267,13 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 		if (isRecording) {
 			return;
 		}
+		setStatus("connecting");
 
 		try {
 			setError(null);
+			setSummaryError(null);
+			setSavedTranscriptionId(null);
+
 			setSegments([]);
 			setInterimSegment(null);
 
@@ -192,6 +323,7 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 
 			recorder.onstart = () => {
 				setIsRecording(true);
+				setStatus("recording");
 			};
 
 			recorder.onstop = () => {
@@ -241,14 +373,15 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 		const recorder = mediaRecorderRef.current;
 
 		if (recorder && recorder.state !== "inactive") {
+			setStatus("stopping");
+
 			/*
-			 * Do NOT send the stop message
-			 * here.
-			 *
-			 * recorder.onstop does it after
-			 * the final dataavailable event.
+			 * onstop will send the final audio chunk
+			 * and then tell the server to finalize
+			 * the Deepgram connection.
 			 */
 			recorder.stop();
+
 			return;
 		}
 
@@ -268,11 +401,18 @@ export function useTranscription(options: UseTranscriptionOptions = {}) {
 	return {
 		isConnected,
 		isRecording,
+		status,
 		segments,
 		interimSegment,
 		error,
+		savedTranscriptionId,
+		isSummarizing,
+		summaryError,
 		start,
 		stop,
+		generateSummary,
+		retrySummary,
+		retrySave,
 	};
 }
 
